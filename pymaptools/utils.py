@@ -5,6 +5,11 @@ from pkg_resources import resource_filename
 from contextlib import contextmanager
 
 
+def hasmethod(obj, method):
+    """check whether object has a method"""
+    return hasattr(obj, method) and callable(getattr(obj, method))
+
+
 def uuid1_to_posix(uuid1):
     """Convert a UUID1 timestamp to a standard POSIX timestamp
 
@@ -41,13 +46,7 @@ def override(parent, child):
 
 
 def read_text_file(rel, fname):
-    """Read a text resource ignoring comments beginning with pound sign
-    :param rel: path
-    :type rel: str
-    :param fname: path
-    :type fname: str
-    :rtype: generator
-    """
+    """Deprecated"""
     with open(resource_filename(rel, fname), 'r') as fhandle:
         for line in fhandle:
             stripped = line.strip()
