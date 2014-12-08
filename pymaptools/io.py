@@ -3,6 +3,8 @@ import re
 import json
 import collections
 import gzip
+import pickle
+import joblib
 from pymaptools.utils import hasmethod
 
 
@@ -27,6 +29,11 @@ def parse_json(line):
         return None
 
 
+def write_json_line(handle, obj):
+    """write a line encoding a JSON object to a file handle"""
+    handle.write(u"{}\n".format(json.dumps(obj)))
+
+
 class FileReader(collections.Iterator):
     """Read files sequentially and return lines from each
 
@@ -38,25 +45,30 @@ class FileReader(collections.Iterator):
     >>> reader = FileReader([[], []])
     >>> list(reader)
     []
+    >>> reader = FileReader([])
+    >>> list(reader)
+    []
     """
     def __init__(self, files, mode='r', openhook=None):
         self._files = iter(files)
         self._curr_handle = None
+        self._curr_filename = None
         self._openhook = openhook
         self._mode = mode
-        self._advance_handle()
+        if files:
+            self._advance_handle()
 
     def _advance_handle(self):
-        filename = self._files.next()
+        self._curr_filename = self._files.next()
         if self._openhook is None:
-            self._curr_handle = filename \
-                if hasmethod(filename, 'next') \
-                else iter(filename)
+            self._curr_handle = self._curr_filename \
+                if hasmethod(self._curr_filename, 'next') \
+                else iter(self._curr_filename)
         else:
             curr_handle = self._curr_handle
             if hasmethod(curr_handle, 'close'):
                 curr_handle.close()
-            self._curr_handle = self._openhook(filename, self._mode)
+            self._curr_handle = self._openhook(self._curr_filename, self._mode)
 
     def __iter__(self):
         return self
@@ -67,6 +79,8 @@ class FileReader(collections.Iterator):
 
     def next(self):
         line = None
+        if self._curr_handle is None:
+            raise StopIteration()
         while line is None:
             try:
                 line = self._curr_handle.next()
@@ -123,3 +137,38 @@ class GzipFileType(argparse.FileType):
             except OSError as err:
                 raise argparse.ArgumentTypeError(
                     "can't open '%s': %s" % (string, err))
+
+
+class DumperFacade(object):
+    """Provides a consistent interface to dumper objects"""
+
+    MODEL_DUMP_TYPES = {
+        'pickle': dict(load=pickle.load, dump='_dump_pickle'),
+        'joblib': dict(load=joblib.load, dump='_dump_joblib')
+    }
+
+    def __init__(self, dumper_type='joblib'):
+        dumper_props = self.MODEL_DUMP_TYPES[dumper_type]
+        self.load = dumper_props['load']
+        self.dump = getattr(self, dumper_props['dump'])
+
+    @classmethod
+    def keys(cls):
+        return cls.MODEL_DUMP_TYPES.keys()
+
+    @staticmethod
+    def _dump_joblib(estimator, fname):
+        joblib.dump(estimator, fname, compress=9)
+
+    @staticmethod
+    def _dump_pickle(estimator, fname):
+        with open(fname, 'wb') as fhandle:
+            pickle.dump(estimator, fhandle)
+
+    @staticmethod
+    def load(fname):
+        pass
+
+    @staticmethod
+    def dump(obj, fname):
+        pass
