@@ -1,6 +1,6 @@
 import collections
 from cyordereddict import OrderedDict
-from heapq import heappush, heapreplace, nsmallest, nlargest
+from heapq import heappush, heapreplace, nsmallest, nlargest, heappop
 from pymaptools.utils import isiterable
 
 
@@ -135,6 +135,8 @@ class Heap(collections.Iterable):
     (3, 'meow')
     >>> list(h)
     ['woof', 'moo']
+    >>> list(reversed(h))
+    ['moo', 'woof']
     """
 
     def __init__(self, maxlen=None):
@@ -175,3 +177,50 @@ class Heap(collections.Iterable):
     def __reversed__(self):
         """iterate from largest to smallest"""
         return (v for _, v in nlargest(len(self._heap), self._heap))
+
+
+class RangeQueue(object):
+    """Rank objects according to consistently-spaced index
+
+    Motivation: Sometimes an ordered stream of items becomes disordered (for example,
+    due to several workers operating on it). In that case, one may still decide
+    to return items in order (i.e. do not wait until all items are
+    processed to start the sorting phase and instead finish in one pass).
+    The idea is that the workers hopefully will not disorganize the list
+    *too much* (i.e.  will not introduce *very* large distances between
+    former neighboring items). If so, one may take adavantage of this partial
+    order and try to return all items in order by caching n items (where n
+    is hopefully a small number) untill all n items form a whole "run" without
+    any lacking items in the middle and thus can be retrieved at once.
+
+    >>> queue = RangeQueue()
+    >>> queue.push(1, "a")
+    >>> list(queue.retrieve())
+    []
+    >>> queue.push(0, "b")
+    >>> queue.push(2, "c")
+    >>> list(queue.retrieve())
+    ['b', 'a', 'c']
+    """
+    def __init__(self, start=0, step=1):
+        self._heap = []
+        self._prev_idx = start - step
+        self._step = step
+
+    def push(self, idx, value):
+        """
+        :param idx: index of the item
+        :type idx: int
+        :param value: item value
+        """
+        heappush(self._heap, (idx, value))
+
+    def retrieve(self):
+        """
+        :rtype: generator
+        """
+        heap = self._heap
+        step = self._step
+        while heap and nsmallest(1, heap)[0][0] == self._prev_idx + step:
+            self._prev_idx, value = heappop(heap)
+            yield value
