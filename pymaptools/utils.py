@@ -1,31 +1,9 @@
 import collections
 import uuid
+import sys
 from copy import deepcopy
-from pkg_resources import resource_filename
 from contextlib import contextmanager
-
-
-def isiterable(obj):
-    """
-    Are we being asked to look up a list of things, instead of a single thing?
-    We check for the `__iter__` attribute so that this can cover types that
-    don't have to be known by this module, such as NumPy arrays.
-
-    Strings, however, should be considered as atomic values to look up, not
-    iterables.
-
-    We don't need to check for the Python 2 `unicode` type, because it doesn't
-    have an `__iter__` attribute anyway.
-
-    This method was written by Luminoso Technologies
-        https://github.com/LuminosoInsight/ordered-set
-    """
-    return hasattr(obj, '__iter__') and not isinstance(obj, str)
-
-
-def hasmethod(obj, method):
-    """check whether object has a method"""
-    return hasattr(obj, method) and callable(getattr(obj, method))
+from pymaptools.iter import isiterable
 
 
 def uuid1_to_posix(uuid1):
@@ -71,11 +49,16 @@ def empty_context(*args, **kwargs):
 
 
 @contextmanager
-def passthrough_context(*args):
+def joint_context(*args):
     """Generic empty context wrapper
 
     Allows constructions like:
-    with passthrough_context(open("filename.txt", "r")) as fhandle:
-    with passthrough_context(open("filename.txt", "r"), open("filename.txt", "r")) as (fhanlde1, fhandle2):
+    with joint_context(open("filename.txt", "r")) as fhandle:
+    with joint_context(open("file1.txt", "r"), open("file2.txt", "r")) as (fh1, fh2):
     """
-    yield args[0] if len(args) == 1 else args
+    try:
+        yield args[0] if len(args) == 1 else args
+    finally:
+        for arg in args:
+            if arg is not sys.stdout:
+                arg.close()

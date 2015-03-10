@@ -3,36 +3,69 @@ import re
 import json
 import collections
 import gzip
+import bz2
 import pickle
 import joblib
 import codecs
-from pymaptools.utils import hasmethod, passthrough_context
+from pymaptools.inspect import hasmethod
+from pymaptools.utils import joint_context
+from pymaptools.iter import isiterable
 
 
-HAS_GZ_EXTENSION = ur'.*\.gz$'
+SUPPORTED_EXTENSION = re.compile(ur'(\.(?:gz|bz2))$', re.IGNORECASE)
+
+
+def get_extension(fname, regex=SUPPORTED_EXTENSION, lowercase=True):
+    """Return a string containing its extension (if matches pattern)
+    """
+    match = regex.search(fname)
+    if match is None:
+        return None
+    elif lowercase:
+        return match.group().lower()
+    else:
+        return match.group()
+
+
+FILEOPEN_FUNCTIONS = {
+    '.gz': lambda fname, mode='r', compresslevel=9: gzip.open(fname, mode + 'b', compresslevel),
+    '.bz2': lambda fname, mode='r', compresslevel=9: bz2.BZ2File(fname, mode, compresslevel)
+}
 
 
 def open_gz(fname, mode='r', compresslevel=9):
+    """Transparent substitute to open() for gzip, bz2 support
+
+    If extension was not found or is not supported, assume it's a plain-text file
     """
-    Transparent substitute to open() for gzip support
-    """
-    if re.match(HAS_GZ_EXTENSION, fname) is None:
+    extension = get_extension(fname)
+    if extension is None:
         return open(fname, mode)
     else:
-        return gzip.open(fname, mode + 'b', compresslevel)
+        fopen_fun = FILEOPEN_FUNCTIONS[extension]
+        return fopen_fun(fname, mode, compresslevel)
 
 
 def parse_json(line):
     """Safe wrapper around json.loads"""
     try:
         return json.loads(line)
-    except Exception:
+    except ValueError:
         return None
 
 
-def write_json_line(handle, obj):
+def default_encode_json(obj):
+    """Default object encoder to JSON
+
+    Warning: one ought to define one's own decoder for one's own
+    object; this method works in many cases but may not be correct.
+    """
+    return obj.__dict__
+
+
+def write_json_line(handle, obj, default=default_encode_json, **kwargs):
     """write a line encoding a JSON object to a file handle"""
-    handle.write(u"{}\n".format(json.dumps(obj)))
+    handle.write(u"%s\n" % json.dumps(obj, default=default, **kwargs))
 
 
 class FileReader(collections.Iterator):
@@ -111,8 +144,8 @@ def read_text_resource(finput, encoding='utf-8', ignore_prefix='#'):
     :type ignore_prefix: str, unicode
     :rtype: generator
     """
-    ctx = passthrough_context(codecs.iterdecode(finput, encoding=encoding)) \
-        if isinstance(finput, file) \
+    ctx = joint_context(codecs.iterdecode(finput, encoding=encoding)) \
+        if isiterable(finput) \
         else codecs.open(finput, 'r', encoding=encoding)
     with ctx as fhandle:
         for line in fhandle:
@@ -129,17 +162,19 @@ class GzipFileType(argparse.FileType):
     """
 
     def __init__(self, mode='r', bufsize=-1, compresslevel=9,
-                 name_pattern=HAS_GZ_EXTENSION):
+                 name_pattern=SUPPORTED_EXTENSION):
         super(GzipFileType, self).__init__(mode, bufsize)
         self._compresslevel = compresslevel
-        self._name_pattern = re.compile(name_pattern)
+        self._name_pattern = name_pattern
 
     def __call__(self, string):
-        if re.match(self._name_pattern, string) is None:
+        extension = get_extension(string, regex=self._name_pattern)
+        if extension is None:
             return super(GzipFileType, self).__call__(string)
         else:
+            fopen_fun = FILEOPEN_FUNCTIONS[extension]
             try:
-                return gzip.open(string, self._mode + 'b', self._compresslevel)
+                return fopen_fun(string, self._mode, self._compresslevel)
             except OSError as err:
                 raise argparse.ArgumentTypeError(
                     "can't open '%s': %s" % (string, err))
@@ -178,3 +213,17 @@ class DumperFacade(object):
     @staticmethod
     def dump(obj, fname):
         pass
+
+
+class SimplePicklableMixin(object):
+    def save_to(self, filename):
+        with open_gz(filename, "wb") as fhandle:
+            pickle.dump(self, fhandle)
+
+    @classmethod
+    def load_from(cls, filename):
+        with open_gz(filename, "rb") as fhandle:
+            obj = pickle.load(fhandle)
+            if not isinstance(obj, cls):
+                raise TypeError("Loaded object not of expected type %s", cls.__name__)
+            return obj

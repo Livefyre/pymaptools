@@ -1,4 +1,4 @@
-__version__ = '0.0.13'
+__version__ = '0.0.18'
 
 from vectorize import enumerator
 from unionfind import UnionFind
