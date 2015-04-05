@@ -6,7 +6,10 @@ import gzip
 import bz2
 import pickle
 import joblib
+import os
 import codecs
+import logging
+from fnmatch import fnmatch
 from pymaptools.inspect import hasmethod
 from pymaptools.utils import joint_context
 from pymaptools.iter import isiterable
@@ -25,6 +28,28 @@ def get_extension(fname, regex=SUPPORTED_EXTENSION, lowercase=True):
         return match.group().lower()
     else:
         return match.group()
+
+
+def walk_files(dirname, file_pattern=u'*'):
+    """Recursively walk through directory tree and find matching files
+    """
+    for root, dirs, files in os.walk(dirname):
+        for name in files:
+            full_name = os.path.join(root, name)
+            if fnmatch(full_name, file_pattern):
+                yield full_name
+
+
+def read_json_lines(fhandle, logger=logging, show_progress=None):
+    for idx, line in enumerate(fhandle, start=1):
+        if show_progress and idx % show_progress == 0 and idx > 1:
+            logger.info("Processed %d lines", idx)
+        try:
+            obj = json.loads(line)
+        except ValueError as err:
+            logger.error("Could not parse line %d: %s", idx, err)
+            continue
+        yield obj
 
 
 FILEOPEN_FUNCTIONS = {
@@ -156,6 +181,27 @@ def read_text_resource(finput, encoding='utf-8', ignore_prefix='#'):
                 yield line
 
 
+def write_text_resource(foutput, text, encoding='utf-8'):
+    """Write a text resource
+    :param foutput: path or file handle
+    :type foutput: str, file
+    :param text: content to write
+    :type text: str, unicode, iterable
+    :param encoding: which encoding to use (default: UTF-8)
+    :type encoding: str
+    """
+    if isinstance(foutput, file):
+        for chunk in codecs.iterencode(text, encoding=encoding):
+            foutput.write(chunk)
+    else:
+        with codecs.open(foutput, 'w', encoding=encoding) as fhandle:
+            if isiterable(text):
+                for line in text:
+                    fhandle.write(u"%s\n" % line)
+            else:
+                fhandle.write(text)
+
+
 class GzipFileType(argparse.FileType):
     """Same as argparse.FileType except works transparently with files
     ending with .gz extension
@@ -178,6 +224,37 @@ class GzipFileType(argparse.FileType):
             except OSError as err:
                 raise argparse.ArgumentTypeError(
                     "can't open '%s': %s" % (string, err))
+
+
+class PathArgumentParser(argparse.ArgumentParser):
+
+    """
+    Supplement argparse.ArgumentParser with a method that checks for
+    valid filesystem paths
+    """
+
+    def __is_valid_file(self, arg):
+        if os.path.isfile(arg):
+            return arg
+        else:
+            self.error("Path '%s' does not correspond to existing file" % arg)
+
+    def __is_valid_directory(self, arg):
+        if os.path.isdir(arg):
+            return arg
+        else:
+            self.error("Path '%s' does not correspond to existing directory" % arg)
+
+    def add_argument(self, *args, **kwargs):
+        if 'metavar' in kwargs and ('type' not in kwargs or kwargs['type'] == str):
+            metavar = kwargs['metavar']
+            if metavar == 'FILE':
+                kwargs['type'] = self.__is_valid_file
+            elif metavar == 'DIR':
+                kwargs['type'] = self.__is_valid_directory
+            else:
+                raise ValueError("Invalid metavar parameter value '%s'" % metavar)
+        super(PathArgumentParser, self).add_argument(*args, **kwargs)
 
 
 class DumperFacade(object):
