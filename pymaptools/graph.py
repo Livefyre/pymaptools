@@ -1,6 +1,7 @@
 import operator
+from copy import deepcopy
 from collections import defaultdict
-from itertools import chain
+from itertools import chain, product
 from StringIO import StringIO
 from contextlib import closing
 from pymaptools.io import SimplePicklableMixin
@@ -42,16 +43,14 @@ class Bigraph(SimplePicklableMixin):
     Example usage:
 
     >>> g = Bigraph()
-    >>> g.add_biclique([1, 2, 3], [-1, -2, -3])
+    >>> g.add_clique(([1, 2, 3], [-1, -2, -3]))
     >>> h = Bigraph(g)
-    >>> g.add_biclique([4], [-4, -5])
-    >>> g.add_biclique([5], [-5, -6])
+    >>> g.add_clique(([4], [-4, -5]))
+    >>> g.add_clique(([5], [-5, -6]))
     >>> g.add_edge(4, -1)
     >>> h.add_edge(2, 100, weight=14)
     >>> h.add_edge(5, -5, weight=10)
     >>> j = g & h
-    >>> list(j.find_cliques())
-    [(set([1, 2, 3]), set([-1, -3, -2])), (set([5]), set([-5]))]
     >>> components = j.find_connected_components()
     >>> curr = components.next()
     >>> (sorted(curr.U), sorted(curr.V))
@@ -75,9 +74,9 @@ class Bigraph(SimplePicklableMixin):
                                  base.edges.default_factory, weight_type)
             if min_edge_weight is None:
                 # simple copy of base object
-                self.edges = base.edges.copy()
-                self.U2V = defaultdict(set, base.U2V)
-                self.V2U = defaultdict(set, base.V2U)
+                self.edges = deepcopy(base.edges)
+                self.U2V = defaultdict(set, deepcopy(base.U2V))
+                self.V2U = defaultdict(set, deepcopy(base.V2U))
             else:
                 # filter out edges with weight below requested
                 self.U2V = defaultdict(set)
@@ -86,13 +85,29 @@ class Bigraph(SimplePicklableMixin):
                 for edge, weight in base.edges.iteritems():
                     if weight >= min_edge_weight:
                         u, v = edge
-                        self.add_edge(u, v, weight=weight)
+                        self.add_edge(u, v, weight=deepcopy(weight))
 
     @classmethod
-    def from_series(cls, series):
+    def from_components(cls, components):
         """Constructs a graph from a series of components
         """
-        return reduce(operator.or_, series, cls())
+        return reduce(operator.or_, components, cls())
+
+    @classmethod
+    def from_edgelist(cls, edgelist):
+        """Construct a graph from a list of tuples or triples
+
+        Tuples represent edges u - v
+        Triples represent edges u - v plus weight component
+        """
+        g = cls()
+        for edge in edgelist:
+            g.add_edge(*edge)
+        return g
+
+    def to_edgelist(self):
+        for edge, weight in self.edges.iteritems():
+            yield edge
 
     def rename_nodes(self, unode_renamer=None, vnode_renamer=None):
         """Factory method that produces another graph just like current one
@@ -111,6 +126,22 @@ class Bigraph(SimplePicklableMixin):
     def get_weight(self):
         return sum(self.edges.itervalues())
 
+    def get_vnode_weight(self, node):
+        neighbors = self.V2U[node]
+        node_weight = self.weight_type()
+        for neighbor in neighbors:
+            edge = self.make_edge(neighbor, node)
+            node_weight += self.edges[edge]
+        return node_weight
+
+    def get_unode_weight(self, node):
+        neighbors = self.U2V[node]
+        node_weight = self.weight_type()
+        for neighbor in neighbors:
+            edge = self.make_edge(node, neighbor)
+            node_weight += self.edges[edge]
+        return node_weight
+
     def __and__(self, other):
         '''Get intersection of edges of two graphs
 
@@ -122,9 +153,11 @@ class Bigraph(SimplePicklableMixin):
         # compile edges into dicts and store weights
         g_map_edge = g._map_edge
         g_store_weight = g._store_weight
+        this_zero = self.weight_type()
+        other_zero = other.weight_type()
         for e in edge_intersection:
             g_map_edge(e)
-            val = min(dict1.get(e, 0), dict2.get(e, 0))
+            val = min(dict1.get(e, this_zero), dict2.get(e, other_zero))
             g_store_weight(e, val)
         return g
 
@@ -139,9 +172,11 @@ class Bigraph(SimplePicklableMixin):
         # compile edges into dicts and store weights
         g_map_edge = g._map_edge
         g_store_weight = g._store_weight
+        this_zero = self.weight_type()
+        other_zero = other.weight_type()
         for e in edge_union:
             g_map_edge(e)
-            val = dict1.get(e, 0) + dict2.get(e, 0)
+            val = dict1.get(e, this_zero) + dict2.get(e, other_zero)
             g_store_weight(e, val)
         return g
 
@@ -196,30 +231,19 @@ class Bigraph(SimplePicklableMixin):
     def _store_weight(self, edge, weight):
         self.edges[edge] += weight
 
-    def add_biclique(self, unodes, vnodes, weight=1):
-        '''Adds a complete bipartite subgraph
+    def add_clique(self, clique, weight=1):
+        '''Adds a complete bipartite subgraph (a 2-clique)
 
-        A compete bipartite subgraph is when all left nodes connected to all
-        right nodes (becomes a part of a maximal biclique).
-        To create an unconnected graph, call this method
-        twice while specifying only one set of arguments each time.
+        :param clique: a clique descriptor (tuple of U and V vertices)
         '''
-        if not unodes or not vnodes:
-            raise GraphError("An edge must connect two nodes")
-        for unode in unodes:
-            self.U2V[unode].update(vnodes)
-        for vnode in vnodes:
-            self.V2U[vnode].update(unodes)
-            # store edge weight
-            for unode in unodes:
-                # using "sorted" version of adding an edge -- needed
-                # only for subclasses which redefine this method
-                self._store_weight_sorted((unode, vnode), weight)
+        unodes, vnodes = clique
+        for u, v in product(unodes, vnodes):
+            self.add_edge(u, v, weight=weight)
 
     def add_edge(self, u, v, weight=1):
         '''Add a single edge (plus two vertices if necessary)
 
-        This is a special case of add_biclique(), only with
+        This is a special case of add_clique(), only with
         scalar parameters. For reading data from files or adjacency
         matrices.
         '''
@@ -309,7 +333,7 @@ class Bigraph(SimplePicklableMixin):
             # stack is empty: done with one component
             yield component
 
-    def find_cliques(self, nodes=None):
+    def find_cliques(self, L=None, P=None):
         '''Find cliques (maximally connected components)
 
         Enumerate all maximal bicliques in an undirected bipartite graph.
@@ -326,33 +350,26 @@ class Bigraph(SimplePicklableMixin):
             P - a set of vertices in V that can be added to R
             Q - a set of vertices in V that have been previously added to R
         '''
-        if nodes is None:
-            # search nodes for the entire graph
-            L = set(self.U)
-            P = set(self.V)
-        else:
-            # search only the specified subset
-            L = set(nodes[0])
-            P = set(nodes[1])
-
         v2u = self.V2U
+        L = set(self.U) if L is None else set(L)
+        P = list(self.V) if P is None else list(P)
         stack = [(L, set(), P, set())]
-        while (stack):
+        while stack:
             L, R, P, Q = stack.pop()
             while P:
                 x = P.pop()
                 # extend biclique
                 R_prime = R | {x}
-                L_prime = L & v2u[x]
+                L_prime = v2u[x] & L
                 # create new sets
-                P_prime = set()
+                P_prime = []
                 Q_prime = set()
                 # check maximality
                 is_maximal = True
                 for v in Q:
                     # checks whether L_prime is a subset of all adjacent nodes
                     # of v in Q
-                    Nv = L_prime & v2u[v]
+                    Nv = v2u[v] & L_prime
                     if len(Nv) == len(L_prime):
                         is_maximal = False
                         break
@@ -363,13 +380,13 @@ class Bigraph(SimplePicklableMixin):
                 if is_maximal:
                     for v in P:
                         # get the neighbors of v in L_prime
-                        Nv = L_prime & v2u[v]
+                        Nv = v2u[v] & L_prime
                         if len(Nv) == len(L_prime):
                             R_prime.add(v)
                         elif Nv:
                             # some vertices in L_prime are not adjacent to v:
                             # keep vertices adjacent to some vertex in L_prime
-                            P_prime.add(v)
+                            P_prime.append(v)
                     yield (L_prime, R_prime)  # report maximal biclique
                     if P_prime:
                         stack.append((L_prime, R_prime, P_prime, Q_prime))
@@ -382,22 +399,23 @@ class Graph(Bigraph):
     undirected graph G = (V, E).
     """
     def __init__(self, base=None, weight_type=int):
+        self.weight_type = weight_type
         if base is None:
             # creating from scratch
             self.U2V = self.V2U = defaultdict(set)  # right to left mapping dict
             self.edges = defaultdict(weight_type)
         elif isinstance(base, self.__class__):
             # deriving from class instance
-            self.U2V = self.V2U = defaultdict(set, base.V2U)
-            self.edges = base.edges.copy()
+            self.U2V = self.V2U = deepcopy(base.V2U)
+            self.edges = deepcopy(base.edges)
         elif issubclass(self.__class__, base.__class__):
             # deriving from Bigraph instance
-            self.V2U = defaultdict(set, base.V2U)
-            self.V2U.update(base.U2V)
+            self.V2U = deepcopy(base.V2U)
+            self.V2U.update(deepcopy(base.U2V))
             self.U2V = self.V2U
             edge_map = defaultdict(weight_type)
             for (node1, node2), weight in base.edges.iteritems():
-                edge_map[self.make_edge(node1, node2)] = weight
+                edge_map[self.make_edge(node1, node2)] = deepcopy(weight)
             self.edges = edge_map
         else:
             raise TypeError("Base object has incorrect type")
@@ -420,6 +438,14 @@ class Graph(Bigraph):
     @property
     def U(self):
         raise NotImplementedError("Set U is only for a bipartite graph")
+
+    def add_clique(self, clique, weight=1):
+        '''Adds a complete bipartite subgraph (a 2-clique)
+
+        :param clique: a clique descriptor (a set of vertices)
+        '''
+        for u, v in product(clique, clique):
+            self.add_edge(u, v, weight=weight)
 
     def get_density(self):
         '''Return the number of existing edges divided by the number of all possible edges

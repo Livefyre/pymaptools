@@ -145,26 +145,25 @@ The output of the above is:
 Graph
 -----
 
-This module provides basic graph arithmetic and some standard algorithms
-such as connected components and clique-finding. The biclique-finding
-algorithm (for bipartite graph) is particularly efficient for large graphs
-and is an implementation of [Zhang2008]_.
+This module provides basic set arithmetic on graphs where graphs
+are represented as collections of edges, and a few basic algorithms
+for graph analysis, including an implementation of MBEA algorithm
+for fast finding of maximal bicliques in bipartite graphs described
+in [Zhang2008]_.
 
 
 .. code-block:: python
 
     >>> from pymaptools.graph import Bigraph
     >>> g = Bigraph()
-    >>> g.add_biclique([1, 2, 3], [-1, -2, -3])
+    >>> g.add_clique(([1, 2, 3], [-1, -2, -3]))
     >>> h = Bigraph(g)
-    >>> g.add_biclique([4], [-4, -5])
-    >>> g.add_biclique([5], [-5, -6])
+    >>> g.add_clique(([4], [-4, -5]))
+    >>> g.add_clique(([5], [-5, -5]))
     >>> g.add_edge(4, -1)
     >>> h.add_edge(2, 100, weight=14)
     >>> h.add_edge(5, -5, weight=10)
     >>> j = g & h
-    >>> list(j.find_cliques())
-    [(set([1, 2, 3]), set([-1, -3, -2])), (set([5]), set([-5]))]
     >>> components = j.find_connected_components()
     >>> curr = components.next()
     >>> (sorted(curr.U), sorted(curr.V))
@@ -175,17 +174,18 @@ and is an implementation of [Zhang2008]_.
 
 
 In addition to standard operations, this module is designed with the common
-use case in mind when edges are assigned integer weights. One can do things like:
+use case in mind when edges are assigned integer weights. One can do things like
 
 
 .. code-block:: python
 
-   >>> from pymaptools.graph import Bigraph
-   >>> b = Bigraph()
-   >>> b.add_edge("a", "b", 4)
-   >>> b.add_edge("b", "c", 1)
-   >>> b.get_weight()
-   5
+    >>> from pymaptools.graph import Bigraph
+    >>> b = Bigraph()
+    >>> b.add_edge("a", "b", 4)
+    >>> b.add_edge("b", "c", 1)
+    >>> b.get_weight()
+    5
+
 
 Citations
 ---------
