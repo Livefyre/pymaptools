@@ -2,13 +2,14 @@ import argparse
 import re
 import json
 import collections
-import gzip
-import bz2
 import pickle
 import joblib
 import os
 import codecs
 import logging
+from gzip import open as gzip_open
+from bz2 import BZ2File
+from zipfile import ZipFile
 from pkg_resources import resource_listdir, resource_filename
 from fnmatch import fnmatch
 from pymaptools.inspect import hasmethod
@@ -16,7 +17,7 @@ from pymaptools.utils import joint_context
 from pymaptools.iter import isiterable
 
 
-SUPPORTED_EXTENSION = re.compile(ur'(\.(?:gz|bz2))$', re.IGNORECASE)
+SUPPORTED_EXTENSION = re.compile(ur'(\.(?:gz|bz2|zip))$', re.IGNORECASE)
 
 
 def get_extension(fname, regex=SUPPORTED_EXTENSION, lowercase=True):
@@ -34,28 +35,33 @@ def get_extension(fname, regex=SUPPORTED_EXTENSION, lowercase=True):
 def walk_files(dirname, file_pattern=u'*'):
     """Recursively walk through directory tree and find matching files
     """
-    for root, dirs, files in os.walk(dirname):
+    for root, _, files in os.walk(dirname):
         for name in files:
             full_name = os.path.join(root, name)
             if fnmatch(full_name, file_pattern):
                 yield full_name
 
 
-def read_json_lines(fhandle, logger=logging, show_progress=None):
-    for idx, line in enumerate(fhandle, start=1):
-        if show_progress and idx % show_progress == 0 and idx > 1:
-            logger.info("Processed %d lines", idx)
-        try:
-            obj = json.loads(line)
-        except ValueError as err:
-            logger.error("Could not parse line %d: %s", idx, err)
-            continue
-        yield obj
+def read_json_lines(finput, logger=logging, show_progress=None):
+    ctx = joint_context(finput) \
+        if isiterable(finput) \
+        else open_gz(finput, 'r')
+    with ctx as fhandle:
+        for idx, line in enumerate(fhandle, start=1):
+            if show_progress and idx % show_progress == 0 and idx > 1:
+                logger.info("Processed %d lines", idx)
+            try:
+                obj = json.loads(line)
+            except ValueError as err:
+                logger.error("Could not parse line %d: %s", idx, err)
+                continue
+            yield obj
 
 
 FILEOPEN_FUNCTIONS = {
-    '.gz': lambda fname, mode='r', compresslevel=9: gzip.open(fname, mode + 'b', compresslevel),
-    '.bz2': lambda fname, mode='r', compresslevel=9: bz2.BZ2File(fname, mode, compresslevel)
+    '.gz': lambda fname, mode='r', compresslevel=9: gzip_open(fname, mode + 'b', compresslevel),
+    '.bz2': lambda fname, mode='r', compresslevel=9: BZ2File(fname, mode, compresslevel),
+    '.zip': lambda fname, mode='r', compresslevel=None: ZipFile(fname, mode).open(os.path.basename(fname)[0:-4])
 }
 
 
